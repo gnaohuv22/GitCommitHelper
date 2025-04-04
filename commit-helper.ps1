@@ -16,6 +16,27 @@ function Test-GitInstalled {
     }
 }
 
+# Check if directory is a valid Git repository
+function Test-ValidGitRepository {
+    param ([string]$path)
+    
+    if (-not (Test-Path -Path (Join-Path $path ".git"))) {
+        return $false
+    }
+    
+    try {
+        Push-Location $path
+        $gitStatus = git status 2>&1
+        Pop-Location
+        
+        # If git status succeeds, it's a valid git repository
+        return $true
+    } catch {
+        Pop-Location
+        return $false
+    }
+}
+
 # Check repository status
 function Test-GitStatus {
     param ([string]$path)
@@ -395,37 +416,103 @@ function Add-NewRepository {
     }
     
     # Check if it's a Git repository
-    if (-not (Test-Path -Path (Join-Path $repoPath ".git"))) {
-        Write-Host "The specified directory is not a Git repository: $repoPath" -ForegroundColor Red
-        Read-Host "Press Enter to continue"
-        return Add-NewRepository  # Try again
+    $isGitRepo = Test-ValidGitRepository -path $repoPath
+    
+    # If it's not a Git repository, suggest git init
+    if (-not $isGitRepo) {
+        Write-Host "The specified directory is not a Git repository: $repoPath" -ForegroundColor Yellow
+        $initConfirm = Read-Host "Do you want to initialize a Git repository here? (Y/n)"
+        
+        if ($initConfirm -eq "" -or $initConfirm.ToLower() -eq "y") {
+            Set-Location $repoPath
+            
+            # Initialize Git repository
+            Write-Host "Initializing Git repository..." -ForegroundColor Yellow
+            git init
+            
+            if ($LASTEXITCODE -ne 0) {
+                Write-Host "Error initializing Git repository." -ForegroundColor Red
+                Read-Host "Press Enter to continue"
+                return Add-NewRepository  # Try again
+            }
+            
+            # Set default branch name
+            $branchName = Read-Host "`nEnter default branch name (default: main)"
+            if ($branchName -eq "") { $branchName = "main" }
+            
+            # Check if there's already a commit to rename the branch
+            $hasCommits = git log -n 1 2>$null
+            
+            if ($hasCommits) {
+                # Rename current branch if there are commits
+                git branch -M $branchName
+            } else {
+                # Store branch name for future use
+                $env:GIT_FIRST_BRANCH = $branchName
+            }
+            
+            # Add remote repository URL
+            $remoteUrl = Read-Host "`nEnter remote repository URL (leave empty to skip)"
+            if ($remoteUrl -ne "") {
+                git remote add origin $remoteUrl
+                if ($LASTEXITCODE -ne 0) {
+                    Write-Host "Error adding remote repository." -ForegroundColor Red
+                }
+            }
+            
+            Write-Host "Git repository initialized successfully!" -ForegroundColor Green
+            $isGitRepo = $true
+        } else {
+            Write-Host "Operation cancelled." -ForegroundColor Yellow
+            Read-Host "Press Enter to continue"
+            return Add-NewRepository  # Try again
+        }
     }
     
     # Go to repository
     Set-Location $repoPath
     
     # Get all local branches
-    $branches = git branch --format="%(refname:short)"
-    $branchList = $branches -split "`n"
+    $branches = git branch --format="%(refname:short)" 2>$null
+    $branchList = @()
     
-    # Get current branch
-    $currentBranch = git rev-parse --abbrev-ref HEAD
-    
-    Write-Host "`nAvailable branches:" -ForegroundColor Yellow
-    for ($i=0; $i -lt $branchList.Count; $i++) {
-        $prefix = if ($branchList[$i] -eq $currentBranch) { "* " } else { "  " }
-        Write-Host "$prefix$($i+1). $($branchList[$i])"
+    if ($branches) {
+        $branchList = $branches -split "`n"
     }
     
-    # Ask which branch to use as default
-    $branchInput = Read-Host "`nSelect default branch (Press Enter to use current branch '$currentBranch')"
+    # Get current branch or handle new repository case
+    $currentBranch = git rev-parse --abbrev-ref HEAD 2>$null
     
-    if ($branchInput -eq "") {
-        $defaultBranch = $currentBranch
-    } elseif ($branchInput -match '^\d+$' -and [int]$branchInput -le $branchList.Count -and [int]$branchInput -gt 0) {
-        $defaultBranch = $branchList[[int]$branchInput-1]
+    # If this is a brand new repository with no commits, check if we saved a branch name
+    if (-not $currentBranch -or $currentBranch -eq "HEAD") {
+        if ($env:GIT_FIRST_BRANCH) {
+            $currentBranch = $env:GIT_FIRST_BRANCH
+        } else {
+            $currentBranch = "main"  # Default to main for new repositories
+        }
+    }
+    
+    if ($branchList.Count -gt 0) {
+        Write-Host "`nAvailable branches:" -ForegroundColor Yellow
+        for ($i=0; $i -lt $branchList.Count; $i++) {
+            $prefix = if ($branchList[$i] -eq $currentBranch) { "* " } else { "  " }
+            Write-Host "$prefix$($i+1). $($branchList[$i])"
+        }
+        
+        # Ask which branch to use as default
+        $branchInput = Read-Host "`nSelect default branch (Press Enter to use current branch '$currentBranch')"
+        
+        if ($branchInput -eq "") {
+            $defaultBranch = $currentBranch
+        } elseif ($branchInput -match '^\d+$' -and [int]$branchInput -le $branchList.Count -and [int]$branchInput -gt 0) {
+            $defaultBranch = $branchList[[int]$branchInput-1]
+        } else {
+            $defaultBranch = $branchInput
+        }
     } else {
-        $defaultBranch = $branchInput
+        # No branches yet, use the branch name we determined earlier
+        $defaultBranch = $currentBranch
+        Write-Host "`nUsing '$defaultBranch' as the default branch." -ForegroundColor Yellow
     }
     
     # Make this repository default?
@@ -454,6 +541,11 @@ function Start-GitHelper {
         Write-Host "Git is not installed or not in PATH. Please install Git and try again." -ForegroundColor Red
         Read-Host "Press Enter to exit"
         exit 1
+    }
+    
+    # Check Git configuration
+    if (-not (Test-GitConfig)) {
+        Fix-GitConfig
     }
     
     # First time repository selection
@@ -596,6 +688,26 @@ function Start-GitHelper {
                         
                         $remote = if ($remoteOption -eq "") { "origin" } else { $remoteOption }
                         
+                        # Check if remote exists, if not, ask for URL
+                        $remoteExists = git remote get-url $remote 2>$null
+                        
+                        if (-not $remoteExists) {
+                            Write-Host "Remote '$remote' does not exist." -ForegroundColor Yellow
+                            $remoteUrl = Read-Host "Enter remote URL for '$remote'"
+                            
+                            if ($remoteUrl -ne "") {
+                                git remote add $remote $remoteUrl
+                                
+                                if ($LASTEXITCODE -ne 0) {
+                                    throw "Error adding remote '$remote'."
+                                }
+                                
+                                Write-Host "Remote '$remote' added successfully." -ForegroundColor Green
+                            } else {
+                                throw "Cannot push without a valid remote."
+                            }
+                        }
+                        
                         Write-Host "Pushing and setting upstream for branch '$currentBranch' to '$remote/$currentBranch'..." -ForegroundColor Yellow
                         git push -u $remote $currentBranch
                     }
@@ -682,6 +794,37 @@ function Start-GitHelper {
                 Start-Sleep -Seconds 2
             }
         }
+    }
+}
+
+# Check Git configuration
+function Test-GitConfig {
+    try {
+        $userEmail = git config --global user.email
+        $userName = git config --global user.name
+        
+        return ($userEmail -ne $null -and $userEmail -ne "") -and ($userName -ne $null -and $userName -ne "")
+    } catch {
+        return $false
+    }
+}
+
+# Fix Git configuration
+function Fix-GitConfig {
+    Write-Host "`nGit configuration is incomplete. Setting up your Git identity." -ForegroundColor Yellow
+    
+    $userName = Read-Host "Enter your name for Git commits"
+    $userEmail = Read-Host "Enter your email for Git commits"
+    
+    if ($userName -and $userEmail) {
+        git config --global user.name $userName
+        git config --global user.email $userEmail
+        
+        Write-Host "Git configuration updated successfully." -ForegroundColor Green
+        return $true
+    } else {
+        Write-Host "Cannot continue without Git identity configuration." -ForegroundColor Red
+        return $false
     }
 }
 

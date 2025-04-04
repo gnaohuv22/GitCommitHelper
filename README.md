@@ -1,7 +1,22 @@
 
-# Git Commit Helper Script
+# Git Commit Helper Script v2
 
 A PowerShell script to simplify common Git operations like committing changes, pushing to remote, branch management, and more.
+
+## v2
+
+### New features
+
+- Auto `git init` if the directory is not a Git repository
+- Default main branch's name is `main`
+- Ask for remote URL when creating new repository
+- `git push -u origin <branch-name>` instead of `git push` for the first push
+- Basic configuration if user hasn't configured Git yet
+
+### Adjustments
+
+- Better experience when working with new repositories
+- Better behavior for first-time repositories
 
 ## Features
 
@@ -26,15 +41,18 @@ Save this script anywhere
 ## Usage
 
 ### First Run Setup
+
 1. Open PowerShell
 2. Navigate to script directory
 3. Run:
+
 ```powershell
 Set-ExecutionPolicy RemoteSigned -Scope CurrentUser
 .\commit-helper.ps1
 ```
 
 ### Main Menu Options
+
 1. **Commit and push changes**  
    - Select commit type
    - Enter commit message
@@ -59,6 +77,7 @@ Set-ExecutionPolicy RemoteSigned -Scope CurrentUser
    - Add new repositories
 
 ### Configuration
+
 - Automatically creates `git-helper-config.json` in script directory
 - Stores:
   - Repository paths
@@ -81,14 +100,17 @@ Set-ExecutionPolicy RemoteSigned -Scope CurrentUser
 ## Troubleshooting
 
 ### Common Issues
+
 1. **Git not found**  
    Ensure Git is installed and available in PATH:
+
    ```powershell
    winget install --id Git.Git -e --source winget
    ```
 
 2. **Execution Policy Restrictions**  
    Allow script execution:
+  
    ```powershell
    Set-ExecutionPolicy RemoteSigned -Scope CurrentUser
    ```
