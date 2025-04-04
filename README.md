@@ -1,4 +1,4 @@
-```markdown
+
 # Git Commit Helper Script
 
 A PowerShell script to simplify common Git operations like committing changes, pushing to remote, branch management, and more.
